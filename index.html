@@ -369,6 +369,14 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
 #adaptive{color:var(--violet);margin-top:8px}
 #wpmPill{font-variant-numeric:tabular-nums}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition:none!important}}
+#walkthrough{width:min(540px,calc(100% - 32px));max-height:85vh;overflow:auto;color:var(--text)}
+#walkthrough::backdrop{background:#080911bb}
+#walkthrough .row,#help .row{margin-top:12px}
+#help dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:12px 0}
+#help dt{color:var(--lime);font-weight:700}
+#help dd{margin:0}
+#practice{scroll-margin-top:20px}
+@media(max-width:480px){#help dl{grid-template-columns:1fr}#help dd{margin-bottom:7px}}
 </style>
 </head>
 <body>
@@ -394,7 +402,7 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
     <button data-page="mission" aria-current="page">Speaking Arena</button>
     <button data-page="recall">Phrase Recall <span id="dueBadge"></span></button>
     <button data-page="vault">Phrase Vault</button>
-    <button data-page="hosting">Hosting</button>
+    <button type="button" id="openWalkthrough">How to use</button>
   </nav>
 
   <!-- PAGE 1: SPEAKING ARENA -->
@@ -458,6 +466,17 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
     </div>
 
     <div id="practice">
+      <details id="help">
+        <summary>Stuck? Ideas, words &amp; a first sentence</summary>
+        <p id="helpContext"></p>
+        <p><strong>What you could say</strong></p>
+        <p id="helpIdeas"></p>
+        <dl id="helpWords"></dl>
+        <p><strong>Start here</strong></p>
+        <p id="helpLine"></p>
+        <div class="row"><button id="hearHint">Hear the starting line</button><button id="easyTopic">Try an everyday topic</button></div>
+        <details><summary>Show a sample answer</summary><p id="helpExample"></p></details>
+      </details>
       <details>
         <summary>💡 Need a starting hint?</summary>
         <p id="starter" class="muted" style="margin-top:6px;"></p>
@@ -480,6 +499,7 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
 
     <!-- 3-WAY AI CORRECTION & PLOT TWIST FEEDBACK -->
     <div id="feedback" hidden>
+      <p class="muted">Read one correction, say the improved sentence aloud, then use <strong>Retry this turn</strong> to say it again in your own words.</p>
       <div class="row" style="justify-content: space-between; margin-top: 10px;">
         <span class="eyebrow" style="color:var(--lime);">⚡ Instant 3-Way Fluency Breakdown</span>
         <span id="turnScoreBadge" class="pill xp">Feedback</span>
@@ -613,6 +633,17 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
   </div>
 </div>
 
+<dialog id="walkthrough" class="card" aria-labelledby="walkTitle">
+  <p id="walkStep" class="eyebrow"></p>
+  <h2 id="walkTitle"></h2>
+  <p id="walkBody"></p>
+  <div class="row">
+    <button id="walkNext" class="primary" autofocus></button>
+    <button id="walkBack">Back</button>
+    <button id="walkEveryday">Start with an everyday topic</button>
+    <button id="walkSkip">Skip</button>
+  </div>
+</dialog>
 <script>
 const GAME_MODES = {
   drama: {
@@ -843,7 +874,7 @@ function recommended() {
       return Number(x.turns>0)-Number(y.turns>0) || (x.last||0)-(y.last||0);
     })[0] ?? 0;
 }
-$("recommend").onclick = () => loadMission(recommended());
+$("recommend").onclick = () => { loadMission(recommended()); focusPractice(); };
 let dynamicNextPrompt = "";
 let lastProHookText = "";
 
@@ -889,6 +920,55 @@ function abortMic() {
   $("mic").classList.remove("recording");
 }
 
+const topicHelp = {
+  cancellation_spike: ["More people cancelled their rides than usual. Imagine the interviewer asks how you'd find out why.", "Check that the data is correct. Then compare busy and quiet hours, or compare riders and drivers.", "First, I'd check whether ____. Then I'd compare ____.", [["spike","achanak badhna"],["peak hours","sabse busy samay"],["rider","sawaari"]]],
+  dashboard_demo: ["Your manager has one minute to understand what changed.", "Say what went up or down, give one reason, and point to a chart.", "The main change this month was ____. One possible reason is ____.", [["revenue","bikri se aayi rakam"],["trend","samay ke saath badlaav"]]],
+  metro_mixup: ["You got on the wrong metro. A friend is waiting.", "Say what happened, where you'll change trains, and when you'll arrive.", "Sorry, I took the wrong train. I'll change at ____.", [["switch trains","train badalna"],["interchange","jahan metro line badal sakte hain"]]],
+  wedding_chaos: ["A guest tried a stunt and fell into the wedding cake.", "Tell your friend what happened first and how people reacted.", "I was near ____ when I saw ____."],
+  bizarre_court: ["Your neighbor thinks you sent dogs to steal a newspaper.", "Say where you were and give a harmless reason why the dogs know you.", "I was at ____ when it happened. The dogs know me because ____."],
+  office_tea: ["A colleague's complaint went to everyone by mistake.", "Suggest a private apology or a quick conversation with the manager.", "If I were him, I'd ____ before ____."],
+  street_vs_5star: ["Pick between a street snack and an expensive restaurant dish.", "Compare cost, taste or convenience. Use a dish you know.", "I prefer ____ because ____."],
+  four_day_week: ["You're asking your boss to try working four days a week.", "Give one benefit and explain how customers would still get help on Fridays.", "I'd suggest a short trial because ____."],
+  traffic_superpower: ["Imagine you could fix one annoying habit on the road.", "Name the habit and explain what your imaginary power would do.", "It annoys me when ____. If I could, I would ____."],
+  angry_vip_client: ["Your client's launch is late and they want answers.", "Acknowledge the problem, then promise an update you can actually deliver.", "I understand why you're upset. By ____, I can give you ____."],
+  salary_negotiation: ["Your manager offered a raise. You want to ask for more.", "Thank them, name one result you delivered, then ask a clear question.", "Thanks for the offer. Given that I helped ____, could we discuss ____?"],
+  deadline_pushback: ["You have two days to build something that usually takes two weeks.", "Suggest one part you can deliver now and a date for the rest.", "By Thursday, I can deliver ____. For the rest, I'd need ____."],
+  hinglish_office: ["You're travelling and need tomorrow's meeting to start earlier.", "Say where you'll be, suggest a new time, and ask for confirmation.", "I'm out of town. Could we move the meeting up to ____?"],
+  polite_disagree: ["A colleague has suggested a plan that costs too much.", "Show that you understood their goal, then suggest a smaller test.", "I see your point. Could we try ____ first?"]
+};
+function updateHelp() {
+  const [phrase,meaning] = lesson();
+  const [context,ideas,line,words=[]] = topicHelp[scene().id] || [
+    scene().prompt, "Pick one thing you want and explain why. A simple, made-up example is fine.",
+    "What I want to do is ____, because ____."
+  ];
+  $("help").open = false;
+  $("help").querySelector("details").open = false;
+  $("helpContext").textContent = turn ? "New situation: answer the follow-up above. You can ask for clarification in English." : context;
+  $("helpIdeas").textContent = turn ? "Name what changed, then give one next step and a reason." : ideas;
+  $("helpLine").textContent = turn ? "Given that, I'd start by ____ because ____." : line;
+  $("helpExample").textContent = turn > 1 || (turn && prompt() !== lesson()[5])
+    ? "Could you clarify what matters most here? Once I know that, I can suggest a next step." : lesson()[turn ? 6 : 4];
+  $("helpWords").replaceChildren();
+  for (const [word,definition] of [[phrase,meaning],...words]) {
+    const term = document.createElement("dt");
+    term.textContent = word;
+    const meaningText = document.createElement("dd");
+    meaningText.textContent = definition;
+    $("helpWords").append(term,meaningText);
+  }
+}
+function focusPractice() {
+  $("practice").scrollIntoView({block:"start"});
+  $("answer").focus({preventScroll:true});
+}
+$("hearHint").onclick = () => say($("helpLine").textContent.replaceAll("____","…"));
+$("easyTopic").onclick = () => {
+  const id = scene().id === "metro_mixup" ? "street_vs_5star" : "metro_mixup";
+  loadMission(scenarios.findIndex(item=>item.id===id));
+  $("help").open = true;
+  $("help").scrollIntoView({block:"center"});
+};
 function displayTurn() {
   endTimer();
   abortMic();
@@ -921,6 +1001,7 @@ function displayTurn() {
   $("micStatus").textContent = Rec ? "Hit 'Start Mic' and speak freely! You can edit your transcript before analyzing." : "Mic transcription unavailable in this browser. Speak with the timer and type your reply below.";
   ["practice","listen"].forEach(id => $(id).hidden = false);
   ["feedback","done","aiNextTwistBox"].forEach(id => $(id).hidden = true);
+  updateHelp();
 }
 
 function loadMission(i) {
@@ -943,7 +1024,7 @@ $("hearGrammarBtn").onclick = () => say($("box2Grammar").textContent);
 $("timer").onclick = () => timerId ? endTimer() : startTimer();
 
 $("insertDemoBtn").onclick = () => {
-  const demo = scene().demoReply || lesson()[4];
+  const demo = $("helpExample").textContent;
   $("answer").value = demo;
   demoAnswer = true;
   updateLiveFillerCount(demo);
@@ -1175,6 +1256,8 @@ $("check").onclick = async () => {
     : `💡 Tip: Try weaving in "${lesson()[0]}" on the next turn.`;
 
   $("box2Grammar").textContent = finalReport.cleanGrammarFix;
+  $("model").closest(".c-card").querySelector(".c-card-header > span").textContent =
+    source === "AI transcript feedback" ? "3. Natural rewrite" : "3. Sample answer";
   $("box2Rule").textContent = `💡 ${finalReport.grammarRule}`;
 
   $("model").textContent = finalReport.proUpgrade;
@@ -1480,8 +1563,54 @@ $("clearApiKeyBtn").onclick = () => {
   hud();
 };
 
+const guide = [
+  ["Start with one reply","Speaking Arena is where you practise. Pick a goal or try an everyday mission for your first round. Use the mic, or speak out loud and type what you said."],
+  ["Get help before you speak","Open “Stuck?” for the situation in simple English, ideas, Hinglish word meanings and a starting line. Try one sentence first. You can also switch to an everyday topic."],
+  ["Make one improvement","Tap “Check my answer.” Starter mode checks common wording and shows a sample reply. Optional AI gives a rewrite of your transcript. Say one improved sentence aloud, then retry or play the follow-up."],
+  ["Bring your phrase back tomorrow","Phrase Vault holds your unlocked phrases and saved examples. Phrase Recall quizzes the unlocked phrases when they're due. XP and streaks track practice in this browser."],
+  ["Make it your own","Surprise me picks a different scene. Custom topic lets you enter your situation. AI settings is optional for live feedback and generated conversations. You can reopen this guide anytime."]
+];
+let guideIndex = 0;
+function renderGuide() {
+  const [title,body] = guide[guideIndex];
+  $("walkStep").textContent = `Quick tour · ${guideIndex+1} / ${guide.length}`;
+  $("walkTitle").textContent = title;
+  $("walkBody").textContent = body;
+  $("walkBack").disabled = guideIndex === 0;
+  $("walkNext").textContent = guideIndex === guide.length-1 ? "Start my first reply" : "Next";
+}
+function startGuide() {
+  guideIndex = 0;
+  renderGuide();
+  $("walkthrough").showModal();
+}
+$("openWalkthrough").onclick = startGuide;
+$("walkBack").onclick = () => { guideIndex--; renderGuide(); };
+$("walkSkip").onclick = () => $("walkthrough").close();
+$("walkEveryday").onclick = () => {
+  $("walkthrough").close();
+  openPage("mission");
+  $("goal").value = "daily";
+  $("goal").onchange();
+  loadMission(recommended());
+  $("help").open = true;
+  focusPractice();
+};
+$("walkthrough").onclose = () => {
+  if (!progress.seenGuide) { progress.seenGuide = true; save(); }
+};
+$("walkNext").onclick = () => {
+  if (guideIndex < guide.length-1) { guideIndex++; renderGuide(); return; }
+  $("walkthrough").close();
+  openPage("mission");
+  if ($("practice").hidden) loadMission(recommended());
+  focusPractice();
+  $("help").open = true;
+};
+
 hud();
 loadMission(recommended());
+if (!progress.seenGuide && progress.xp === 0) startGuide();
 </script>
 </body>
 </html>
