@@ -611,7 +611,7 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
   <p id="storageNotice" class="muted compact" role="status"></p>
 </main>
 
-<!-- FREE API KEY MODAL (STORED SAFELY IN LOCALSTORAGE) -->
+<!-- Session-only API connection -->
 <div id="apiModal" class="modal-backdrop" hidden>
   <div class="modal-card">
     <div class="row" style="justify-content: space-between; margin-bottom: 8px;">
@@ -620,14 +620,14 @@ h1{font-size:clamp(2.5rem,8vw,5rem);line-height:1.02}
     </div>
     <p class="muted">Optional personal testing. Your key stays in memory until reload and is sent to your chosen provider along with the topic or transcript you submit. Browser-side keys are visible to browser code. Keep a shared app key on a backend.</p>
     <label for="apiKeyInput">Your Gemini or Groq API key</label>
-    <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste your own key">
+    <input id="apiKeyInput" type="password" autocomplete="off" placeholder="Paste a Gemini or Groq key" aria-describedby="apiNotice">
     <label for="apiModelInput">Model ID (optional)</label>
     <input id="apiModelInput" placeholder="Use the default or enter an available model ID">
     <p id="apiNotice" class="muted" role="status"></p>
     <div class="row" style="justify-content: space-between; margin-top: 14px;">
       <button id="clearApiKeyBtn" style="font-size:0.82rem; color:#fda4af;">Disconnect</button>
       <div class="row">
-        <button id="saveApiKeyBtn" class="primary">Use for this session</button>
+        <button id="saveApiKeyBtn" class="primary">Test and connect</button>
       </div>
     </div>
   </div>
@@ -824,7 +824,9 @@ function hud() {
   $("xpPill").textContent = `⚡ LVL ${lvl} · ${progress.xp} XP`;
   const dueCount = Object.keys(progress.cards).filter(id=>lessons[id] && progress.cards[id].due<=day()).length;
   $("dueBadge").textContent = dueCount ? `(${dueCount})` : "";
-  $("aiModeStatus").textContent = userApiKey ? "AI connection configured" : "Starter practice";
+  const aiStatus = userApiKey ? `${providerName(userApiKey)} connected` : "Starter practice";
+  $("aiModeStatus").textContent = aiStatus;
+  $("openApiModal").textContent = userApiKey ? aiStatus : "AI settings";
   const count = progress.dailyDay === day() ? progress.dailyTurns : 0;
   $("dailyStatus").textContent = (count >= 3 ? "Daily goal cleared · 3 practice replies"
     : `${count} / 3 replies`) + (dueCount ? ` · ${dueCount} phrase${dueCount===1?"":"s"} ready to review` : "");
@@ -1168,16 +1170,20 @@ function buildLocal3WayAnalysis(answer) {
   };
 }
 
-async function askAI(instruction, payload, fields) {
-  if (!userApiKey) return null;
-  const groq = userApiKey.startsWith("gsk_");
-  const modelId = userApiModel || (groq ? "openai/gpt-oss-20b" : "gemini-3.5-flash");
+function providerName(key) {
+  return key.startsWith("gsk_") ? "Groq" : "Gemini";
+}
+
+async function askAI(instruction, payload, fields, key = userApiKey, model = userApiModel) {
+  if (!key) return null;
+  const groq = providerName(key) === "Groq";
+  const modelId = model || (groq ? "openai/gpt-oss-20b" : "gemini-3.1-flash-lite");
   const message = JSON.stringify(payload);
   const url = groq ? "https://api.groq.com/openai/v1/chat/completions"
     : `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent`;
   const res = await fetch(url, {
     method:"POST", signal:AbortSignal.timeout(14000),
-    headers:{"Content-Type":"application/json", ...(groq ? {Authorization:`Bearer ${userApiKey}`} : {"x-goog-api-key":userApiKey})},
+    headers:{"Content-Type":"application/json", ...(groq ? {Authorization:`Bearer ${key}`} : {"x-goog-api-key":key})},
     body:JSON.stringify(groq ? {
       model:modelId, response_format:{type:"json_object"},
       messages:[{role:"system",content:instruction},{role:"user",content:message}]
@@ -1186,7 +1192,15 @@ async function askAI(instruction, payload, fields) {
       generationConfig:{responseMimeType:"application/json"}
     })
   });
-  if (!res.ok) throw new Error(res.status===429 ? "AI quota or rate limit reached." : `AI provider returned HTTP ${res.status}.`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const invalidKey = body?.error?.details?.some?.(item => item.reason === "API_KEY_INVALID");
+    if (res.status === 401 || invalidKey) throw new Error("Provider rejected this API key. Copy an active key from your provider and try again.");
+    if (res.status === 403) throw new Error("Provider denied access (403). Check the key restrictions and project permissions.");
+    if (res.status === 404) throw new Error("Model unavailable (404). Clear the Model ID or choose one enabled for your project.");
+    if (res.status === 429) throw new Error("AI quota or rate limit reached (429). Check your provider quota and try again later.");
+    throw new Error(`AI provider returned HTTP ${res.status}.`);
+  }
   const data = await res.json();
   const raw = groq ? data.choices?.[0]?.message?.content : data.candidates?.[0]?.content?.parts?.find(part=>part.text && !part.thought)?.text;
   const result = JSON.parse(raw);
@@ -1532,11 +1546,16 @@ function openPage(page) {
 }
 document.querySelectorAll("[data-page]").forEach(button => button.onclick = () => openPage(button.dataset.page));
 
-// API KEY MODAL HANDLERS
+// API connection settings
+let testingConnection = false;
 $("openApiModal").onclick = () => {
+  if (testingConnection) return;
   $("apiKeyInput").value = "";
   $("apiModelInput").value = userApiModel;
-  $("apiNotice").textContent = userApiKey ? "A key is configured for this tab." : "";
+  $("apiNotice").textContent = userApiKey
+    ? `${providerName(userApiKey)} connected in this tab. Leave the key field blank to keep using it.`
+    : "No AI connected. Paste your key and run a connection test.";
+  $("clearApiKeyBtn").disabled = !userApiKey;
   $("apiModal").hidden = false;
   $("apiKeyInput").focus();
 };
@@ -1545,21 +1564,50 @@ function closeApiModal() {
   $("apiModal").hidden = true;
 }
 $("closeApiModal").onclick = closeApiModal;
-$("saveApiKeyBtn").onclick = () => {
-  const value = $("apiKeyInput").value.trim();
-  if (!value && !userApiKey || value && !/^(AIza|gsk_)[A-Za-z0-9_-]+$/.test(value)) {
-    $("apiNotice").textContent = "Enter a Gemini or Groq API key.";
+$("saveApiKeyBtn").onclick = async () => {
+  if (testingConnection) return;
+  const pasted = $("apiKeyInput").value.trim().replace(/^["']|["']$/g, "").trim();
+  const key = pasted || userApiKey;
+  const model = $("apiModelInput").value.trim().replace(/^models\//, "");
+  if (!key || !/^(?:AIza|AQ\.|gsk_)[A-Za-z0-9._-]+$/.test(key)) {
+    $("apiNotice").textContent = "Paste the key itself from Google AI Studio (AQ. or AIza) or Groq (gsk_).";
     return;
   }
-  userApiKey = value || userApiKey;
-  userApiModel = $("apiModelInput").value.trim();
-  closeApiModal();
-  hud();
+  const controls = ["apiKeyInput","apiModelInput","saveApiKeyBtn","clearApiKeyBtn","closeApiModal"];
+  testingConnection = true;
+  controls.forEach(id => $(id).disabled = true);
+  $("apiNotice").textContent = `Testing ${providerName(key)}…`;
+  $("saveApiKeyBtn").textContent = "Testing…";
+  try {
+    await askAI('Return a JSON object with one string field named status, set to "ok".',
+      {test:"connection"}, ["status"], key, model);
+    userApiKey = key;
+    userApiModel = model;
+    $("apiKeyInput").value = "";
+    $("apiNotice").textContent = `${providerName(key)} connected. The test passed. This connection stays active until you reload or disconnect.`;
+    hud();
+  } catch (error) {
+    const message = error.name === "TimeoutError" || error.name === "AbortError"
+      ? "The connection test timed out. Try again."
+      : error instanceof TypeError ? "Could not reach the AI provider. Check your network or browser restrictions."
+      : error instanceof SyntaxError ? "The provider returned an unreadable response. Try again or choose another model."
+      : error.message;
+    $("apiNotice").textContent = userApiKey ? `${message} Your previous connection is still selected.` : message;
+  } finally {
+    testingConnection = false;
+    controls.forEach(id => $(id).disabled = false);
+    $("clearApiKeyBtn").disabled = !userApiKey;
+    $("saveApiKeyBtn").textContent = userApiKey ? "Test connection" : "Test and connect";
+  }
 };
 $("clearApiKeyBtn").onclick = () => {
   userApiKey = "";
   userApiModel = "";
-  closeApiModal();
+  $("apiKeyInput").value = "";
+  $("apiModelInput").value = "";
+  $("apiNotice").textContent = "Disconnected. Starter practice is active.";
+  $("saveApiKeyBtn").textContent = "Test and connect";
+  $("clearApiKeyBtn").disabled = true;
   hud();
 };
 
